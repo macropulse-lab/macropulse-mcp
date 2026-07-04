@@ -1,3 +1,12 @@
+<div align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/brand/logo-mono.svg">
+  <img src=".github/brand/logo-green.svg" alt="MacroPulse" width="72" height="72">
+</picture>
+
+<sub>Part of the <a href="https://github.com/GabrielGauss/macropulse-platform">MacroPulse platform</a></sub>
+</div>
+
 # macropulse-mcp
 
 MCP (Model Context Protocol) server for [MacroPulse](https://macropulse.live) — daily macro regime classification as native tools for Claude, ChatGPT, and any MCP-compatible agent framework.
@@ -69,3 +78,9 @@ The API key is optional — public tools work without it. Get a free key at [mac
 ## License
 
 MIT
+
+---
+
+<div align="center">
+<sub>Part of the <a href="https://github.com/GabrielGauss/macropulse-platform">MacroPulse platform</a> · <a href="https://macropulse.live">macropulse.live</a> · <a href="https://macropulse.live/irl">IRL Engine</a></sub>
+</div>
