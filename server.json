@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.GabrielGauss/macropulse-mcp",
+  "title": "MacroPulse",
+  "description": "Daily US macro regime (expansion, recovery, tightening, risk-off) from MacroPulse.",
+  "repository": {
+    "url": "https://github.com/GabrielGauss/macropulse-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://macropulse.live",
+  "version": "0.2.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "macropulse-mcp",
+      "version": "0.2.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MACROPULSE_API_KEY",
+          "description": "MacroPulse API key. Optional: public tools work without it. Free key at https://macropulse.live; forecast, scorecard and liquidity need Starter or Pro.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "MACROPULSE_API_BASE",
+          "description": "API URL override for testing (https only). Default: https://api.macropulse.live",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
