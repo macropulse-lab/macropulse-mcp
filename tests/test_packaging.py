@@ -1,0 +1,70 @@
+"""Release metadata stays consistent: versions, registry manifest, README marker."""
+
+from __future__ import annotations
+
+import json
+import tomllib
+from pathlib import Path
+from typing import Any
+
+import jsonschema
+
+from macropulse_mcp import __version__
+
+ROOT = Path(__file__).resolve().parent.parent
+REGISTRY_NAME = "io.github.GabrielGauss/macropulse-mcp"
+
+
+def _pyproject() -> dict[str, Any]:
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+def _server_json() -> dict[str, Any]:
+    data: dict[str, Any] = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+    return data
+
+
+def test_versions_agree() -> None:
+    version = _pyproject()["project"]["version"]
+    manifest = _server_json()
+
+    assert version == __version__ == manifest["version"]
+    assert [p["version"] for p in manifest["packages"]] == [version]
+
+
+def test_server_json_is_valid_against_the_registry_schema() -> None:
+    schema = json.loads(
+        (ROOT / "tests" / "fixtures" / "server.schema.2025-12-11.json").read_text(encoding="utf-8")
+    )
+    manifest = _server_json()
+
+    assert manifest["$schema"] == schema["$id"]
+    jsonschema.validate(manifest, schema)
+
+
+def test_server_json_points_at_this_pypi_package() -> None:
+    manifest = _server_json()
+    (package,) = manifest["packages"]
+
+    assert manifest["name"] == REGISTRY_NAME
+    assert package["registryType"] == "pypi"
+    assert package["identifier"] == _pyproject()["project"]["name"] == "macropulse-mcp"
+    assert package["transport"] == {"type": "stdio"}
+    key_var = {v["name"]: v for v in package["environmentVariables"]}["MACROPULSE_API_KEY"]
+    assert key_var["isSecret"] is True
+    assert key_var["isRequired"] is False
+
+
+def test_readme_carries_the_registry_ownership_marker() -> None:
+    # The MCP Registry checks the PyPI README for this exact marker.
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert f"mcp-name: {REGISTRY_NAME}" in readme
+
+
+def test_readme_installs_what_actually_exists() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "uvx macropulse-mcp" in readme
+    assert "chatgpt" not in readme.lower()
+    assert "alpha" not in readme.lower()
