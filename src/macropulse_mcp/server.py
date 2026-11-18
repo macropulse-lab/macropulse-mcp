@@ -1,119 +1,195 @@
-"""
-MacroPulse MCP server.
+"""MacroPulse MCP server (stdio).
 
-Exposes the MacroPulse macro regime API as MCP tools so LLMs and agent
-frameworks can query the current regime, history, and forecasts natively.
-
-Public tools work without credentials. Authenticated tools require the
-MACROPULSE_API_KEY environment variable (free key: https://macropulse.live).
+Exposes the MacroPulse daily macro regime as read-only MCP tools. Public tools
+work without credentials; the rest read MACROPULSE_API_KEY from the environment.
 """
 
 from __future__ import annotations
 
+import argparse
+import copy
+import datetime as dt
+import logging
 import os
-from typing import Any
+import sys
+from collections.abc import Awaitable
+from typing import Annotated, Any
 
-import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import ToolAnnotations
+from pydantic import Field
 
-API_BASE = os.environ.get("MACROPULSE_API_BASE", "https://api.macropulse.live")
-API_KEY = os.environ.get("MACROPULSE_API_KEY", "")
-TIMEOUT_SECONDS = 15.0
-
-mcp = FastMCP(
-    "macropulse",
-    instructions=(
-        "MacroPulse provides daily macro regime classification for US markets: "
-        "four regimes (expansion, recovery, tightening, risk_off) derived from "
-        "Fed liquidity, credit spreads, volatility, and yield curve data. "
-        "Use get_current_regime for the latest signal. Authenticated tools "
-        "require a MacroPulse API key (free at https://macropulse.live)."
-    ),
+from macropulse_mcp import __version__
+from macropulse_mcp.client import Auth, MacroPulseClient, MacroPulseError
+from macropulse_mcp.config import (
+    BASE_ENV,
+    DEFAULT_API_BASE,
+    KEY_ENV,
+    SIGNUP_URL,
+    ConfigError,
+    load_settings,
 )
+from macropulse_mcp.regimes import EXPLANATION
+
+logger = logging.getLogger(__name__)
+
+INSTRUCTIONS = """\
+MacroPulse classifies each US trading day into one of four macro regimes
+(expansion, recovery, tightening, risk_off) with a frozen v4 model (PCA plus a
+Statistical Jump Model) that runs once a day at 21:00 UTC. Start with
+get_current_regime; call explain_regimes to describe what the regimes mean.
+The data is informational, not investment advice: report it as MacroPulse's
+classification, not as a forecast of returns. Tools marked as needing a key
+read MACROPULSE_API_KEY; if a call fails, relay the error text to the user,
+since it says how to get or upgrade a key."""
+
+READ_ONLY = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=True)
+OFFLINE = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False)
+
+HistoryLimit = Annotated[
+    int, Field(ge=1, le=1000, description="Rows to return, newest first (Free plan: max 30).")
+]
+Horizon = Annotated[int, Field(ge=1, le=10, description="Business days ahead (1-10).")]
+LiquidityLimit = Annotated[int, Field(ge=1, le=500, description="Rows to return (1-500).")]
+OptionalDate = Annotated[dt.date | None, Field(description="YYYY-MM-DD, inclusive.")]
 
 
-def _get(path: str, *, authed: bool = False, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    """GET a MacroPulse endpoint and return parsed JSON, raising on errors."""
-    headers = {}
-    if authed:
-        if not API_KEY:
-            raise RuntimeError(
-                "This tool requires a MacroPulse API key. Set the MACROPULSE_API_KEY "
-                "environment variable — get a free key at https://macropulse.live"
-            )
-        headers["X-MacroPulse-Key"] = API_KEY
-
-    with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
-        resp = client.get(f"{API_BASE}{path}", headers=headers, params=params)
-        if resp.status_code == 401:
-            raise RuntimeError("MacroPulse API key rejected. Check MACROPULSE_API_KEY.")
-        if resp.status_code == 403:
-            raise RuntimeError(
-                "This endpoint requires a higher MacroPulse tier. "
-                "See https://macropulse.live/pricing"
-            )
-        resp.raise_for_status()
-        return resp.json()
+async def _fetch(call: Awaitable[Any]) -> Any:
+    try:
+        return await call
+    except MacroPulseError as exc:
+        raise ToolError(str(exc)) from None
 
 
-@mcp.tool()
-def get_current_regime() -> dict[str, Any]:
-    """Get today's macro regime classification: regime label, risk score
-    (-100 to +100), suggested equity exposure, and a one-line interpretation.
-    Public — no API key required."""
-    return _get("/v1/public/regime")
+def _expect_dict(body: Any) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise ToolError("MacroPulse returned an unexpected response shape. Try again later.")
+    return body
 
 
-@mcp.tool()
-def get_market_snapshot() -> dict[str, Any]:
-    """Get the latest public market snapshot: regime with confidence and
-    persistence, net-liquidity z-score and trend, and suggested equity
-    exposure. Public — no API key required."""
-    return _get("/v1/public/latest")
+def create_server(client: MacroPulseClient) -> MCPServer:
+    server = MCPServer(
+        name="macropulse",
+        title="MacroPulse",
+        version=__version__,
+        instructions=INSTRUCTIONS,
+        website_url="https://macropulse.live",
+    )
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_current_regime() -> dict[str, Any]:
+        """Today's macro regime: label, risk score, target equity exposure for that
+        regime and a one-line plain-English interpretation. Updated once a day after
+        21:00 UTC. No API key needed."""
+        return _expect_dict(await _fetch(client.get("/v1/public/regime", auth=Auth.PUBLIC)))
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_signed_regime() -> dict[str, Any]:
+        """The current regime as MacroPulse's signed payload: timestamp, regime,
+        regime_id (0 expansion, 1 recovery, 2 tightening, 3 risk_off), risk score,
+        the four regime probabilities, model version and `signature`. The signature
+        is Ed25519 (base64) over the canonical JSON (sorted keys, no whitespace) of
+        the payload without the `signature` field. Returned exactly as served; this
+        tool does not verify the signature. No API key needed."""
+        return _expect_dict(await _fetch(client.get("/v1/regime/current", auth=Auth.PUBLIC)))
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_market_snapshot() -> dict[str, Any]:
+        """Latest snapshot: most likely regime with confidence, days in the regime
+        (persistence) and risk score, the net Fed liquidity z-score and trend, and the
+        regime's target equity exposure as a fraction. No API key needed."""
+        return _expect_dict(await _fetch(client.get("/v1/public/latest", auth=Auth.PUBLIC)))
+
+    @server.tool(annotations=OFFLINE)
+    def explain_regimes() -> dict[str, Any]:
+        """What the four MacroPulse regimes mean, their regime_id and target equity
+        exposure (100% / 75% / 25% / 0%), and how and when the model runs. Static
+        reference text; makes no network call."""
+        return copy.deepcopy(EXPLANATION)
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_regime_history(
+        limit: HistoryLimit = 30,
+        start: OptionalDate = None,
+        end: OptionalDate = None,
+    ) -> dict[str, Any]:
+        """Daily regime history, newest first: regime, risk score and the four regime
+        probabilities per day. Needs MACROPULSE_API_KEY; the free plan works and
+        returns at most 30 rows."""
+        if start and end and start > end:
+            raise ToolError("start must be on or before end.")
+        params: dict[str, str | int] = {"limit": limit}
+        if start:
+            params["start"] = start.isoformat()
+        if end:
+            params["end"] = end.isoformat()
+        body = await _fetch(client.get("/v1/regime/history", auth=Auth.KEY, params=params))
+        if not isinstance(body, list):
+            raise ToolError("MacroPulse returned an unexpected response shape. Try again later.")
+        return {"count": len(body), "rows": body}
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_forecast(horizon: Horizon = 5) -> dict[str, Any]:
+        """Statistical (ARIMA) projection of the four regime probabilities and the risk
+        score for the next 1-10 business days. A model extrapolation, not a prediction
+        of prices. Needs MACROPULSE_API_KEY on the Starter or Pro plan."""
+        call = client.get("/v1/forecast", auth=Auth.PAID, params={"horizon": horizon})
+        return _expect_dict(await _fetch(call))
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_scorecard() -> dict[str, Any]:
+        """Macro scorecard: five normalized macro signals on a -1 to 1 scale. Needs
+        MACROPULSE_API_KEY on the Starter or Pro plan."""
+        return _expect_dict(await _fetch(client.get("/v1/scorecard", auth=Auth.PAID)))
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_liquidity(limit: LiquidityLimit = 30) -> dict[str, Any]:
+        """Net Fed liquidity time series (Fed balance sheet minus Treasury General
+        Account minus reverse repo). Needs MACROPULSE_API_KEY on the Starter or Pro
+        plan."""
+        call = client.get("/v1/liquidity", auth=Auth.PAID, params={"limit": limit})
+        return _expect_dict(await _fetch(call))
+
+    return server
 
 
-@mcp.tool()
-def get_performance_series() -> dict[str, Any]:
-    """Get the public daily time series (trailing ~2 years): regime, risk
-    score, S&P 500, gold, and the regime-overlay strategy — all indexed to
-    100. Useful for charting or computing regime-conditioned statistics.
-    Public — no API key required."""
-    return _get("/v1/public/chart-data")
+# Exit status for "can't start: configuration", distinct from a crash (1).
+EXIT_CONFIG = 2
 
 
-@mcp.tool()
-def get_regime_history(days: int = 30) -> Any:
-    """Get the authenticated regime history for the last N days, including
-    per-day regime probabilities and risk scores. Free tier: 30-day window;
-    Starter: 6 months; Pro: full history. Requires MACROPULSE_API_KEY."""
-    return _get("/v1/regime/history", authed=True, params={"days": days})
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="macropulse-mcp",
+        description="MCP server (stdio) for the MacroPulse daily macro regime.",
+        epilog=(
+            f"Public tools work without a key. For history, forecast, scorecard and "
+            f"liquidity set {KEY_ENV} (free key at {SIGNUP_URL}). {BASE_ENV} overrides "
+            f"the API URL (default {DEFAULT_API_BASE})."
+        ),
+    )
+    parser.add_argument("--version", action="version", version=f"macropulse-mcp {__version__}")
+    return parser
 
 
-@mcp.tool()
-def get_forecast() -> dict[str, Any]:
-    """Get the 5-day regime forecast with transition probabilities.
-    Requires MACROPULSE_API_KEY (Starter tier or above)."""
-    return _get("/v1/forecast", authed=True)
-
-
-@mcp.tool()
-def get_scorecard() -> dict[str, Any]:
-    """Get the signal scorecard: hit rates, regime persistence, and signal
-    quality metrics. Requires MACROPULSE_API_KEY (Starter tier or above)."""
-    return _get("/v1/scorecard", authed=True)
-
-
-@mcp.tool()
-def get_liquidity() -> dict[str, Any]:
-    """Get the Fed liquidity decomposition: net liquidity, Fed assets, TGA,
-    and RRP balances with trends. Requires MACROPULSE_API_KEY (Starter tier
-    or above)."""
-    return _get("/v1/liquidity", authed=True)
-
-
-def main() -> None:
-    """Run the MCP server over stdio."""
-    mcp.run()
+def main(argv: list[str] | None = None) -> None:
+    """Console entry point. stdout carries the MCP protocol: messages go to stderr."""
+    _parser().parse_args(argv)
+    logging.basicConfig(level=logging.WARNING, stream=sys.stderr, format="%(message)s")
+    try:
+        settings = load_settings(os.environ)
+    except ConfigError as exc:
+        print(f"macropulse-mcp: invalid configuration: {exc}", file=sys.stderr)
+        sys.exit(EXIT_CONFIG)
+    if settings.api_key_problem:
+        print(f"macropulse-mcp: {settings.api_key_problem}", file=sys.stderr)
+    client = MacroPulseClient(settings)
+    key_state = "set" if client.has_key else f"not set (public tools only; {SIGNUP_URL})"
+    print(f"macropulse-mcp {__version__}: API key: {key_state}", file=sys.stderr)
+    try:
+        create_server(client).run()
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
