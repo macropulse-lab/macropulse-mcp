@@ -25,8 +25,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://macropulse.live"
 Documentation = "https://macropulse.live/api-docs"
-Repository = "https://github.com/GabrielGauss/macropulse-mcp"
-Issues = "https://github.com/GabrielGauss/macropulse-mcp/issues"
+Repository = "https://github.com/macropulse-lab/macropulse-mcp"
+Issues = "https://github.com/macropulse-lab/macropulse-mcp/issues"
 
 [project.scripts]
 macropulse-mcp = "macropulse_mcp.server:main"

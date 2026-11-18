@@ -12,7 +12,7 @@ import jsonschema
 from macropulse_mcp import __version__
 
 ROOT = Path(__file__).resolve().parent.parent
-REGISTRY_NAME = "io.github.GabrielGauss/macropulse-mcp"
+REGISTRY_NAME = "io.github.macropulse-lab/macropulse-mcp"
 
 
 def _pyproject() -> dict[str, Any]:
@@ -68,3 +68,13 @@ def test_readme_installs_what_actually_exists() -> None:
     assert "uvx macropulse-mcp" in readme
     assert "chatgpt" not in readme.lower()
     assert "alpha" not in readme.lower()
+
+
+def test_registry_namespace_matches_the_repository_owner() -> None:
+    # The registry's GitHub OIDC login only grants io.github.<repository_owner>/*,
+    # so the name must follow the org that owns the repo the release runs in.
+    manifest = _server_json()
+    owner = manifest["repository"]["url"].removeprefix("https://github.com/").split("/")[0]
+
+    assert manifest["name"].startswith(f"io.github.{owner}/")
+    assert _pyproject()["project"]["urls"]["Repository"] == manifest["repository"]["url"]

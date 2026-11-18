@@ -1,10 +1,10 @@
 <div align="center">
-<img src="https://raw.githubusercontent.com/GabrielGauss/macropulse-mcp/master/.github/brand/logo.svg" alt="MacroPulse" width="64" height="64">
+<img src="https://raw.githubusercontent.com/macropulse-lab/macropulse-mcp/master/.github/brand/logo.svg" alt="MacroPulse" width="64" height="64">
 </div>
 
 # macropulse-mcp
 
-<!-- mcp-name: io.github.GabrielGauss/macropulse-mcp -->
+<!-- mcp-name: io.github.macropulse-lab/macropulse-mcp -->
 
 An [MCP](https://modelcontextprotocol.io) server for [MacroPulse](https://macropulse.live): the daily US macro regime as tools your AI agent can call in Claude Code, Claude Desktop, Cursor or any MCP client that runs local (stdio) servers. No code to write.
 
