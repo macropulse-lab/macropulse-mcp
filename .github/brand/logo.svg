@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="MacroPulse">
+  <!-- Target equity exposure by regime: Expansion 100%, Recovery 75%, Tightening 25%, Risk-off 0%. -->
+  <rect width="32" height="32" fill="#FFFFFF"/>
+  <rect x="3"  y="4"    width="5" height="22"  fill="#1D4ED8"/>
+  <rect x="10" y="9.5"  width="5" height="16.5" fill="#6B8FE8"/>
+  <rect x="17" y="20.5" width="5" height="5.5"  fill="#E07A1F"/>
+  <rect x="24" y="24.5" width="5" height="1.5"  fill="#8A3B0E"/>
+  <rect x="2"  y="26"   width="28" height="3"   fill="#0B0C0E"/>
+</svg>

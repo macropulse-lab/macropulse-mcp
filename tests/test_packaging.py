@@ -1,0 +1,124 @@
+"""Release metadata stays consistent: versions, registry manifest, README marker."""
+
+from __future__ import annotations
+
+import json
+import re
+import tomllib
+from pathlib import Path
+from typing import Any
+
+import jsonschema
+
+from macropulse_mcp import __version__
+
+ROOT = Path(__file__).resolve().parent.parent
+REGISTRY_NAME = "io.github.macropulse-lab/macropulse-mcp"
+
+
+def _pyproject() -> dict[str, Any]:
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+def _server_json() -> dict[str, Any]:
+    data: dict[str, Any] = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+    return data
+
+
+def test_versions_agree() -> None:
+    # Single source: hatch reads the version from macropulse_mcp/__init__.py.
+    project = _pyproject()
+    assert "version" in project["project"]["dynamic"]
+    assert project["tool"]["hatch"]["version"]["path"] == "src/macropulse_mcp/__init__.py"
+    # Read the file itself: installed metadata can be stale after a version bump
+    # until the package is reinstalled.
+    source = (ROOT / "src" / "macropulse_mcp" / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'^__version__ = "([^"]+)"$', source, flags=re.MULTILINE)
+    assert match is not None
+    version = match.group(1)
+    manifest = _server_json()
+
+    assert version == __version__ == manifest["version"]
+    assert [p["version"] for p in manifest["packages"]] == [version]
+
+
+def test_server_json_is_valid_against_the_registry_schema() -> None:
+    schema = json.loads(
+        (ROOT / "tests" / "fixtures" / "server.schema.2025-12-11.json").read_text(encoding="utf-8")
+    )
+    manifest = _server_json()
+
+    assert manifest["$schema"] == schema["$id"]
+    jsonschema.validate(manifest, schema)
+
+
+def test_server_json_points_at_this_pypi_package() -> None:
+    manifest = _server_json()
+    (package,) = manifest["packages"]
+
+    assert manifest["name"] == REGISTRY_NAME
+    assert package["registryType"] == "pypi"
+    assert package["identifier"] == _pyproject()["project"]["name"] == "macropulse-mcp"
+    assert package["transport"] == {"type": "stdio"}
+    key_var = {v["name"]: v for v in package["environmentVariables"]}["MACROPULSE_API_KEY"]
+    assert key_var["isSecret"] is True
+    assert key_var["isRequired"] is False
+
+
+def test_readme_carries_the_registry_ownership_marker() -> None:
+    # The MCP Registry checks the PyPI README for this exact marker.
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert f"mcp-name: {REGISTRY_NAME}" in readme
+
+
+def test_readme_installs_what_actually_exists() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "uvx macropulse-mcp" in readme
+    assert "chatgpt" not in readme.lower()
+    assert "alpha" not in readme.lower()
+
+
+def test_registry_namespace_matches_the_repository_owner() -> None:
+    # The registry's GitHub OIDC login only grants io.github.<repository_owner>/*,
+    # so the name must follow the org that owns the repo the release runs in.
+    manifest = _server_json()
+    owner = manifest["repository"]["url"].removeprefix("https://github.com/").split("/")[0]
+
+    assert manifest["name"].startswith(f"io.github.{owner}/")
+    assert _pyproject()["project"]["urls"]["Repository"] == manifest["repository"]["url"]
+
+
+def test_readme_warns_that_the_base_url_receives_the_key() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "`MACROPULSE_API_BASE` receives your API key." in readme
+    assert "only at hosts you trust" in readme
+
+
+def test_readme_copy_matches_the_audit() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    # Options go before the server name (claude mcp add [options] <name> -- <command>).
+    assert "claude mcp add --transport stdio macropulse -- uvx macropulse-mcp" in readme
+    assert (
+        "claude mcp add --env MACROPULSE_API_KEY=mp_your_key --transport stdio macropulse "
+        "-- uvx macropulse-mcp" in readme
+    )
+    assert "claude mcp add macropulse" not in readme
+    assert "any MCP client that runs local (stdio) servers. Example configs for Claude Code" in (
+        readme
+    )
+    assert "trading day" not in readme
+    assert "rows before 2026-07-03 are a hindsight backfill" in readme
+    assert "(a characterization, not advice)" in readme
+    assert "[IRL](https://norve.dev)" in readme
+    assert "macropulse.live/irl" not in readme
+
+
+def test_classifier_is_alpha_until_tested_in_real_clients() -> None:
+    classifiers = _pyproject()["project"]["classifiers"]
+
+    assert "Development Status :: 3 - Alpha" in classifiers
+    assert not any(c.startswith("Development Status :: 4") for c in classifiers)
