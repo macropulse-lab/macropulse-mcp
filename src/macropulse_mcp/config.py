@@ -42,20 +42,43 @@ def load_settings(env: Mapping[str, str]) -> Settings:
 
 
 def _parse_key(raw: str) -> tuple[str | None, str | None]:
-    key = raw.strip()
+    stripped = raw.strip()
+    key = _unquote(stripped)
+    # Never include the value in a message; its length is safe to report.
+    fix = f"Copy the key again from {SIGNUP_URL}."
     if not key:
+        if stripped:
+            return None, f"{KEY_ENV} is set to empty quotes. {fix}"
         return None, None
-    # Printable ASCII without spaces: anything else cannot be a MacroPulse key and,
-    # in a header, could smuggle extra lines. Never include the value in the message.
-    if not _MIN_KEY_LENGTH <= len(key) <= _MAX_KEY_LENGTH or not all(
-        "!" <= ch <= "~" for ch in key
-    ):
+    if len(key) < _MIN_KEY_LENGTH:
         return None, (
-            f"{KEY_ENV} is set but malformed (it must be a single token of "
-            f"{_MIN_KEY_LENGTH} or more printable characters, no spaces). Copy the key "
-            f"again from {SIGNUP_URL}."
+            f"{KEY_ENV} is too short to be a MacroPulse key ({len(key)} characters; keys "
+            f"have at least {_MIN_KEY_LENGTH}). {fix}"
+        )
+    if len(key) > _MAX_KEY_LENGTH:
+        return None, (
+            f"{KEY_ENV} is too long to be a MacroPulse key ({len(key)} characters; the "
+            f"limit is {_MAX_KEY_LENGTH}). {fix}"
+        )
+    # Printable ASCII without spaces: anything else cannot be a MacroPulse key and,
+    # in a header, could smuggle extra lines.
+    if not all("!" <= ch <= "~" for ch in key):
+        return None, (
+            f"{KEY_ENV} contains spaces, line breaks or non-ASCII characters, which a "
+            f"MacroPulse key never has. {fix}"
         )
     return key, None
+
+
+def _unquote(value: str) -> str:
+    """Drop one pair of matching surrounding quotes.
+
+    Windows `set KEY="..."` and hand-written .env or JSON configs keep the quotes;
+    a key never starts or ends with one, so stripping a symmetric pair is safe.
+    """
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1].strip()
+    return value
 
 
 def _parse_base(raw: str) -> str:

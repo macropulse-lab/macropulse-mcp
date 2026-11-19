@@ -36,6 +36,8 @@ def test_blank_key_counts_as_no_key() -> None:
         "mp_ñandú",
         "mp_" + "a" * 300,
         "mp_tooshort",  # under 16 characters
+        "x" * 15,  # one under the floor
+        '"mp_abc def ghi jkl"',  # quotes removed, inner spaces still rejected
     ],
 )
 def test_malformed_key_is_dropped_and_explained_without_echoing_it(bad_key: str) -> None:
@@ -92,3 +94,53 @@ def test_accepts_a_16_character_key_without_the_mp_prefix() -> None:
     key = "x" * 16
 
     assert load_settings({"MACROPULSE_API_KEY": key}).api_key == key
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_a_quoted_key_is_unquoted(quote: str) -> None:
+    key = "mp_" + "a" * 43
+
+    settings = load_settings({"MACROPULSE_API_KEY": f"  {quote}{key}{quote} "})
+
+    assert settings.api_key == key
+    assert settings.api_key_problem is None
+
+
+@pytest.mark.parametrize("raw", ['"mp_' + "a" * 43 + "'", '"mp_' + "a" * 43])
+def test_unbalanced_quotes_are_not_stripped(raw: str) -> None:
+    settings = load_settings({"MACROPULSE_API_KEY": raw})
+
+    assert settings.api_key == raw
+
+
+def test_a_key_padded_with_spaces_is_trimmed() -> None:
+    key = "x" * 16
+
+    assert load_settings({"MACROPULSE_API_KEY": f" {key} "}).api_key == key
+
+
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [
+        ("x" * 15, "too short"),
+        ("x" * 257, "too long"),
+        ("mp_" + "a" * 20 + " b", "spaces"),
+    ],
+)
+def test_the_problem_names_its_cause_and_length_but_not_the_key(raw: str, reason: str) -> None:
+    problem = load_settings({"MACROPULSE_API_KEY": raw}).api_key_problem
+
+    assert problem is not None
+    assert reason in problem
+    assert raw not in problem
+    if reason != "spaces":
+        assert f"{len(raw)} characters" in problem
+
+
+@pytest.mark.parametrize("raw", ['""', "''", '"  "'])
+def test_empty_quotes_are_reported_not_treated_as_unset(raw: str) -> None:
+    settings = load_settings({"MACROPULSE_API_KEY": raw})
+
+    assert settings.api_key is None
+    assert settings.api_key_problem is not None
+    assert "empty quotes" in settings.api_key_problem
