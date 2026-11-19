@@ -77,7 +77,7 @@ All tools are read-only.
 | `get_scorecard` | key, Starter or Pro | Five normalized macro signals on a -1 to 1 scale |
 | `get_liquidity` | key, Starter or Pro | Net Fed liquidity time series (`limit`, 1-500) |
 
-When a call fails, the tool returns one line that says what to do: get a key, upgrade the plan, check the key, or try again later. The key is sent only in the `X-MacroPulse-Key` header and is never logged or echoed.
+API results come back under `data`, next to a `source` field that marks them as third-party data rather than instructions for the agent. When a call fails, the tool returns one line that says what to do: get a key, upgrade the plan, check the key, or try again later. The key is sent only in the `X-MacroPulse-Key` header and is never logged or echoed.
 
 ## The four regimes
 
@@ -96,6 +96,8 @@ The exposure is a rule of thumb attached to each label, not a recommendation for
 | --- | --- | --- |
 | `MACROPULSE_API_KEY` | unset | API key for the keyed tools |
 | `MACROPULSE_API_BASE` | `https://api.macropulse.live` | API URL override for testing (https only; plain http only for localhost) |
+
+**`MACROPULSE_API_BASE` receives your API key.** Every keyed call sends `MACROPULSE_API_KEY` to that host, so point it only at hosts you trust (normally leave it unset). Redirects are never followed.
 
 ## Development
 
