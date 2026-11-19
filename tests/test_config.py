@@ -135,3 +135,12 @@ def test_the_problem_names_its_cause_and_length_but_not_the_key(raw: str, reason
     assert raw not in problem
     if reason != "spaces":
         assert f"{len(raw)} characters" in problem
+
+
+@pytest.mark.parametrize("raw", ['""', "''", '"  "'])
+def test_empty_quotes_are_reported_not_treated_as_unset(raw: str) -> None:
+    settings = load_settings({"MACROPULSE_API_KEY": raw})
+
+    assert settings.api_key is None
+    assert settings.api_key_problem is not None
+    assert "empty quotes" in settings.api_key_problem

@@ -42,11 +42,14 @@ def load_settings(env: Mapping[str, str]) -> Settings:
 
 
 def _parse_key(raw: str) -> tuple[str | None, str | None]:
-    key = _unquote(raw.strip())
-    if not key:
-        return None, None
+    stripped = raw.strip()
+    key = _unquote(stripped)
     # Never include the value in a message; its length is safe to report.
     fix = f"Copy the key again from {SIGNUP_URL}."
+    if not key:
+        if stripped:
+            return None, f"{KEY_ENV} is set to empty quotes. {fix}"
+        return None, None
     if len(key) < _MIN_KEY_LENGTH:
         return None, (
             f"{KEY_ENV} is too short to be a MacroPulse key ({len(key)} characters; keys "
