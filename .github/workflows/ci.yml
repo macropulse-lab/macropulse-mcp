@@ -28,7 +28,7 @@ jobs:
       - run: ruff check src tests
       - run: black --check src tests
       - run: isort --check-only src tests
-      - run: mypy src
+      - run: mypy src tests
       # Offline: the MacroPulse API is mocked; the live smoke test is skipped.
       - run: pytest --cov=macropulse_mcp --cov-fail-under=90
 

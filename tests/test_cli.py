@@ -81,7 +81,7 @@ def test_main_rejects_bad_base_url(
 
 @pytest.mark.parametrize(
     ("key", "expected"),
-    [(None, "API key: not set"), (FAKE_KEY, "API key: set"), ("mp_bad key", "malformed")],
+    [(None, "API key: not set"), (FAKE_KEY, "API key: set"), ("mp_bad key", "too short")],
 )
 def test_main_banner(
     monkeypatch: pytest.MonkeyPatch,

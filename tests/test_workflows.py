@@ -125,7 +125,7 @@ def test_test_job_runs_lint_types_and_tests_without_publishing_rights() -> None:
     runs = "\n".join(_runs(test))
 
     assert test["permissions"] == {"contents": "read"}
-    for check in ("ruff check", "black --check", "isort --check-only", "mypy src", "pytest"):
+    for check in ("ruff check", "black --check", "isort --check-only", "mypy src tests", "pytest"):
         assert check in runs, check
     assert not _uploads_dist(test)
     assert sorted(jobs["publish"]["needs"]) == ["build", "test"]
