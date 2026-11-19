@@ -46,7 +46,7 @@ def test_only_publish_and_registry_jobs_get_an_oidc_token() -> None:
 def test_publish_job_only_downloads_the_artifact_and_runs_the_pinned_action() -> None:
     publish = _load("release.yml")["jobs"]["publish"]
 
-    assert publish["needs"] == "build"
+    assert sorted(publish["needs"]) == ["build", "test"]
     assert publish["environment"] == "pypi"
     assert publish["permissions"] == {"id-token": "write"}
     steps = publish["steps"]
@@ -69,18 +69,66 @@ def test_registry_job_runs_after_publish_with_minimal_permissions() -> None:
     assert registry["permissions"] == {"contents": "read", "id-token": "write"}
 
 
-def test_build_job_checks_ancestry_versions_and_quality_before_upload() -> None:
-    build = _load("release.yml")["jobs"]["build"]
-    runs = "\n".join(step.get("run", "") for step in build["steps"])
+def _runs(job: dict[str, Any]) -> list[str]:
+    return [step["run"] for step in job.get("steps", []) if "run" in step]
 
-    checkout = build["steps"][0]
-    assert checkout["with"]["fetch-depth"] == 0
+
+def _uploads_dist(job: dict[str, Any]) -> bool:
+    return any(
+        step.get("uses", "").startswith("actions/upload-artifact@")
+        and str(step.get("with", {}).get("path", "")).startswith("dist")
+        for step in job.get("steps", [])
+    )
+
+
+def test_the_job_that_uploads_dist_installs_only_hash_pinned_wheels() -> None:
+    jobs = _load("release.yml")["jobs"]
+    uploaders = {name: job for name, job in jobs.items() if _uploads_dist(job)}
+
+    assert set(uploaders) == {"build"}
+    for name, job in uploaders.items():
+        for run in _runs(job):
+            for line in run.splitlines():
+                if "pip install" in line:
+                    assert "--require-hashes" in line, f"{name}: {line}"
+                    assert "--only-binary=:all:" in line, f"{name}: {line}"
+                    assert " -e " not in line and "[dev]" not in line, f"{name}: {line}"
+        assert not any(
+            check in run
+            for run in _runs(job)
+            for check in ("pytest", "ruff", "black", "isort", "mypy")
+        ), f"{name} must not run the test toolchain"
+
+
+def test_build_job_checks_ancestry_and_versions_then_builds_and_uploads() -> None:
+    build = _load("release.yml")["jobs"]["build"]
+    runs = "\n".join(_runs(build))
+
+    assert build["permissions"] == {"contents": "read"}
+    assert build["steps"][0]["with"]["fetch-depth"] == 0
     assert 'git merge-base --is-ancestor "$GITHUB_SHA" origin/master' in runs
-    assert "--require-hashes -r .github/release/release-tools.txt" in runs
-    assert "python -m build --no-isolation" in runs
-    for check in ("twine check --strict", "ruff check", "black --check", "mypy src", "pytest"):
-        assert check in runs, check
+    assert "jq -e --arg v \"$VERSION\" '.version == $v and .packages[0].version == $v'" in runs
+    assert "grep" not in runs
+    order = [
+        "pip install --require-hashes --only-binary=:all: -r .github/release/release-tools.txt",
+        "python -m build --no-isolation",
+        "twine check --strict",
+    ]
+    positions = [runs.index(item) for item in order]
+    assert positions == sorted(positions)
     assert _uses(build)[-1].startswith("actions/upload-artifact@")
+
+
+def test_test_job_runs_lint_types_and_tests_without_publishing_rights() -> None:
+    jobs = _load("release.yml")["jobs"]
+    test = jobs["test"]
+    runs = "\n".join(_runs(test))
+
+    assert test["permissions"] == {"contents": "read"}
+    for check in ("ruff check", "black --check", "isort --check-only", "mypy src", "pytest"):
+        assert check in runs, check
+    assert not _uploads_dist(test)
+    assert sorted(jobs["publish"]["needs"]) == ["build", "test"]
 
 
 def test_release_tools_are_pinned_with_hashes() -> None:
