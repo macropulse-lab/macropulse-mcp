@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import tomllib
 from pathlib import Path
@@ -25,7 +26,11 @@ def _server_json() -> dict[str, Any]:
 
 
 def test_versions_agree() -> None:
-    version = _pyproject()["project"]["version"]
+    # Single source: hatch reads the version from macropulse_mcp/__init__.py.
+    project = _pyproject()
+    assert "version" in project["project"]["dynamic"]
+    assert project["tool"]["hatch"]["version"]["path"] == "src/macropulse_mcp/__init__.py"
+    version = importlib.metadata.version("macropulse-mcp")
     manifest = _server_json()
 
     assert version == __version__ == manifest["version"]
@@ -78,3 +83,10 @@ def test_registry_namespace_matches_the_repository_owner() -> None:
 
     assert manifest["name"].startswith(f"io.github.{owner}/")
     assert _pyproject()["project"]["urls"]["Repository"] == manifest["repository"]["url"]
+
+
+def test_readme_warns_that_the_base_url_receives_the_key() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "`MACROPULSE_API_BASE` receives your API key." in readme
+    assert "only at hosts you trust" in readme

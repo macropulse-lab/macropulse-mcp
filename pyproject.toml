@@ -1,6 +1,6 @@
 [project]
 name = "macropulse-mcp"
-version = "0.2.0"
+dynamic = ["version"]
 description = "MCP server for MacroPulse: the daily macro regime (Statistical Jump Model) as tools for AI agents"
 readme = "README.md"
 license = "MIT"
@@ -37,6 +37,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
     "jsonschema>=4.20",
+    "pyyaml>=6.0",
     "black>=24.0",
     "isort>=5.13",
     "ruff>=0.4",
@@ -46,6 +47,9 @@ dev = [
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/macropulse_mcp/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/macropulse_mcp"]
