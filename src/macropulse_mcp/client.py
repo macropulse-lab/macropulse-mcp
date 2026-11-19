@@ -27,12 +27,17 @@ DEFAULT_DEADLINE_SECONDS = 15.0
 _DETAIL_MAX = 160
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 _REDACTED = "[redacted]"
-# Largest body read from the API; real responses are a few KB.
-MAX_BODY_BYTES = 5 * 1024 * 1024
+# Largest body read from the API, counted in bytes on the wire (bodies are never
+# decompressed). The biggest real response, 1000 history rows, is about 0.5 MB.
+MAX_BODY_BYTES = 2 * 1024 * 1024
 RELAY_PREFIX = "MacroPulse API said: "
 
 
 class _BodyTooLarge(Exception):
+    pass
+
+
+class _EncodedBody(Exception):
     pass
 
 
@@ -95,7 +100,7 @@ class MacroPulseClient:
         headers = {
             "User-Agent": f"macropulse-mcp/{__version__}",
             "Accept": "application/json",
-            # No compression: the 5 MB cap then bounds what the server can make us inflate.
+            # Ask for no compression; a compressed answer is refused unread in `_send`.
             "Accept-Encoding": "identity",
         }
         if auth is not Auth.PUBLIC:
@@ -115,6 +120,12 @@ class MacroPulseClient:
             raise MacroPulseError(
                 f"MacroPulse returned a response larger than {MAX_BODY_BYTES // (1024 * 1024)} MB; "
                 "it was not read. Try again later."
+            ) from None
+        except _EncodedBody:
+            logger.warning("GET %s returned a compressed body", path)
+            raise MacroPulseError(
+                "MacroPulse returned a compressed response, which this server does not "
+                f"decompress; it was not read. Check {BASE_ENV}."
             ) from None
         except httpx.HTTPError as exc:
             logger.warning("GET %s failed (%s)", path, type(exc).__name__)
@@ -153,18 +164,26 @@ class MacroPulseClient:
             follow_redirects=False,
         ) as http:
             async with http.stream("GET", path, headers=headers, params=params) as streamed:
+                # Decompressing would let a few KB on the wire inflate past any cap before
+                # it is checked (zlib has no output bound per chunk, encodings can stack),
+                # so anything but an identity body is refused before reading it.
+                encoding = streamed.headers.get("content-encoding", "").strip().lower()
+                if encoding not in ("", "identity"):
+                    raise _EncodedBody
                 declared = streamed.headers.get("content-length", "")
                 if declared.isdigit() and int(declared) > MAX_BODY_BYTES:
                     raise _BodyTooLarge
                 chunks: list[bytes] = []
                 size = 0
+                # With the encoding checked above, httpx applies its identity decoder:
+                # each chunk counted here is exactly what came over the wire.
                 async for chunk in streamed.aiter_bytes():
                     size += len(chunk)
                     if size > MAX_BODY_BYTES:
                         raise _BodyTooLarge
                     chunks.append(chunk)
-            # aiter_bytes() already decoded the body (and the cap applies to the decoded
-            # size, which stops compression bombs), so drop the encoding headers.
+            # The body is already de-chunked and has no content encoding, so drop the
+            # framing headers before rebuilding a plain response around it.
             headers = {
                 k: v
                 for k, v in streamed.headers.items()

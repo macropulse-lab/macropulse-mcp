@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import logging
 
 import httpx
@@ -93,8 +95,7 @@ ERROR_CASES = [
                 "plans (Starter and Pro) can call from multiple locations."
             ),
         },
-        "Your key is bound to another IP address; wait 15 minutes of inactivity or use a "
-        "paid plan",
+        "Your key is bound to another IP address; wait 15 minutes of inactivity or use a paid plan",
     ),
     (402, {"detail": "suspended due to a failed payment"}, "failed payment"),
     (429, {"error": "rate_limit_exceeded", "detail": "Daily limit"}, "rate limit"),
@@ -333,7 +334,7 @@ async def test_declared_oversized_body_is_refused_without_reading_it(api: FakeAp
         ),
     )
 
-    with pytest.raises(MacroPulseError, match=r"larger than 5 MB"):
+    with pytest.raises(MacroPulseError, match=r"larger than 2 MB"):
         await make_client(api).get("/v1/public/regime", auth=Auth.PUBLIC)
 
 
@@ -341,7 +342,7 @@ async def test_streamed_oversized_body_is_cut_off(api: FakeApi) -> None:
     from macropulse_mcp.client import MAX_BODY_BYTES
 
     def chunks() -> object:
-        async def gen():  # type: ignore[no-untyped-def]
+        async def gen() -> AsyncIterator[bytes]:
             for _ in range(MAX_BODY_BYTES // 65536 + 2):
                 yield b" " * 65536
 
@@ -349,21 +350,49 @@ async def test_streamed_oversized_body_is_cut_off(api: FakeApi) -> None:
 
     api.raw("/v1/public/regime", lambda _r: httpx.Response(200, content=chunks()))  # type: ignore[arg-type]
 
-    with pytest.raises(MacroPulseError, match=r"larger than 5 MB; it was not read"):
+    with pytest.raises(MacroPulseError, match=r"larger than 2 MB; it was not read"):
         await make_client(api).get("/v1/public/regime", auth=Auth.PUBLIC)
 
 
-async def test_gzip_bodies_are_decoded_once(api: FakeApi) -> None:
+@pytest.mark.parametrize("encoding", ["gzip", "gzip, gzip", "br", "deflate", " GZIP "])
+async def test_compressed_bodies_are_refused_unread(api: FakeApi, encoding: str) -> None:
     import gzip
-    import json as jsonlib
 
-    payload = gzip.compress(jsonlib.dumps({"regime": "tightening"}).encode())
+    # A double-gzipped bomb: a few KB on the wire, 200 MB once inflated.
+    bomb = gzip.compress(gzip.compress(b"0" * (200 * 1024 * 1024)))
+    read = False
+
+    def body() -> object:
+        async def gen() -> AsyncIterator[bytes]:
+            nonlocal read
+            read = True
+            yield bomb
+
+        return gen()
+
     api.raw(
         "/v1/public/regime",
         lambda _r: httpx.Response(
             200,
-            content=payload,
-            headers={"content-encoding": "gzip", "content-type": "application/json"},
+            content=body(),  # type: ignore[arg-type]
+            headers={"content-encoding": encoding, "content-type": "application/json"},
+        ),
+    )
+
+    with pytest.raises(MacroPulseError, match="compressed response") as excinfo:
+        await make_client(api).get("/v1/public/regime", auth=Auth.PUBLIC)
+
+    assert not read
+    assert "\n" not in str(excinfo.value)
+
+
+async def test_identity_encoded_bodies_are_read(api: FakeApi) -> None:
+    api.raw(
+        "/v1/public/regime",
+        lambda _r: httpx.Response(
+            200,
+            content=b'{"regime": "tightening"}',
+            headers={"content-encoding": "identity", "content-type": "application/json"},
         ),
     )
 
@@ -381,32 +410,16 @@ async def test_requests_ask_for_an_uncompressed_body(api: FakeApi) -> None:
 
 
 async def test_body_that_parses_but_is_too_deep_to_scrub_is_a_clean_error(
-    api: FakeApi,
+    api: FakeApi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import json as jsonlib
+    from macropulse_mcp import client as client_module
 
-    # Find a depth json can parse but the recursive scrub cannot walk (~995 levels).
-    depth = 990
-    while True:
-        text = "[" * depth + '"x"' + "]" * depth
-        try:
-            jsonlib.loads(text)
-        except RecursionError:
-            pytest.skip("json parser hit the recursion limit first on this interpreter")
-        from macropulse_mcp.client import _scrub_json
+    def overflow(_value: object, _key: str | None) -> object:
+        raise RecursionError("maximum recursion depth exceeded")
 
-        try:
-            _scrub_json(jsonlib.loads(text), FAKE_KEY)
-        except RecursionError:
-            break
-        depth += 5
-        assert depth < 10_000
-    api.raw(
-        "/v1/scorecard",
-        lambda _r: httpx.Response(
-            200, content=text.encode(), headers={"content-type": "application/json"}
-        ),
-    )
+    # Deterministic stand-in for a body nested deep enough to parse but not to scrub.
+    monkeypatch.setattr(client_module, "_scrub_json", overflow)
+    api.json("/v1/scorecard", {"ok": True})
 
     with pytest.raises(MacroPulseError, match="too deeply nested") as excinfo:
         await make_client(api, api_key=FAKE_KEY).get("/v1/scorecard", auth=Auth.PAID)
