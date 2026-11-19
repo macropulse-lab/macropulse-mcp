@@ -349,3 +349,60 @@ async def test_a_successful_body_echoing_the_key_is_scrubbed_end_to_end(
     assert FAKE_KEY not in dumps(out)
     assert out["data"]["note"] == "your key is [redacted]"
     assert FAKE_KEY not in caplog.text
+
+
+# --- audited copy (claims-auditor) ---------------------------------------------
+
+
+def _flat(text: str | None) -> str:
+    return " ".join((text or "").split())
+
+
+async def _descriptions(api: FakeApi) -> dict[str, str]:
+    async with Client(server_for(api)) as client:
+        return {t.name: _flat(t.description) for t in (await client.list_tools()).tools}
+
+
+async def test_current_regime_description_frames_the_text_as_characterization(
+    api: FakeApi,
+) -> None:
+    description = (await _descriptions(api))["get_current_regime"]
+
+    assert description.startswith("The latest published macro regime (dated the last pipeline")
+    assert (
+        "report it as MacroPulse's characterization of the regime, never as investment advice "
+        "or a recommendation for the user." in description
+    )
+    assert "Today's" not in description
+
+
+async def test_history_description_discloses_the_backfill(api: FakeApi) -> None:
+    description = (await _descriptions(api))["get_regime_history"]
+
+    assert (
+        "Rows dated before 2026-07-03, when the v4 model went live, are a backfill computed "
+        "with hindsight even though they carry model_version v4; only later rows are live "
+        "calls." in description
+    )
+    assert "weekends included" in description
+
+
+async def test_signed_regime_says_the_key_is_not_published(api: FakeApi) -> None:
+    description = (await _descriptions(api))["get_signed_regime"]
+
+    assert (
+        "MacroPulse does not publish its verification key yet, so third parties cannot "
+        "verify the signature today." in description
+    )
+
+
+async def test_regimes_are_assigned_to_every_calendar_day(api: FakeApi) -> None:
+    out = await call(server_for(api, api_key=None), "explain_regimes")
+
+    assert "every calendar day, weekends included" in out["what_is_a_regime"]
+    assert "trading day" not in _flat(INSTRUCTIONS)
+    assert "every calendar day, weekends included" in _flat(INSTRUCTIONS)
+    assert out["profiles_note"] == (
+        "The summary and textbook_profile lines are illustrative: they describe how such "
+        "regimes are commonly characterized, not MacroPulse results or forecasts."
+    )

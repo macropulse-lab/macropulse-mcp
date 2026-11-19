@@ -90,3 +90,30 @@ def test_readme_warns_that_the_base_url_receives_the_key() -> None:
 
     assert "`MACROPULSE_API_BASE` receives your API key." in readme
     assert "only at hosts you trust" in readme
+
+
+def test_readme_copy_matches_the_audit() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    # Options go before the server name (claude mcp add [options] <name> -- <command>).
+    assert "claude mcp add --transport stdio macropulse -- uvx macropulse-mcp" in readme
+    assert (
+        "claude mcp add --env MACROPULSE_API_KEY=mp_your_key --transport stdio macropulse "
+        "-- uvx macropulse-mcp" in readme
+    )
+    assert "claude mcp add macropulse" not in readme
+    assert "any MCP client that runs local (stdio) servers. Example configs for Claude Code" in (
+        readme
+    )
+    assert "trading day" not in readme
+    assert "rows before 2026-07-03 are a hindsight backfill" in readme
+    assert "(a characterization, not advice)" in readme
+    assert "[IRL](https://norve.dev)" in readme
+    assert "macropulse.live/irl" not in readme
+
+
+def test_classifier_is_alpha_until_tested_in_real_clients() -> None:
+    classifiers = _pyproject()["project"]["classifiers"]
+
+    assert "Development Status :: 3 - Alpha" in classifiers
+    assert not any(c.startswith("Development Status :: 4") for c in classifiers)

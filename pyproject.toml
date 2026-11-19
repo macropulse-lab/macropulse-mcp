@@ -9,7 +9,7 @@ requires-python = ">=3.12"
 authors = [{ name = "MacroPulse", email = "support@macropulse.live" }]
 keywords = ["mcp", "macro", "regime", "finance", "claude", "llm", "agents"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Financial and Insurance Industry",
     "Programming Language :: Python :: 3",

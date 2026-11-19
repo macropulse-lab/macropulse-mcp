@@ -35,8 +35,8 @@ from macropulse_mcp.regimes import EXPLANATION
 logger = logging.getLogger(__name__)
 
 INSTRUCTIONS = """\
-MacroPulse classifies each US trading day into one of four macro regimes
-(expansion, recovery, tightening, risk_off) with a frozen v4 model (PCA plus a
+MacroPulse assigns one of four macro regimes to every calendar day, weekends
+included (expansion, recovery, tightening, risk_off), with a frozen v4 model (PCA plus a
 Statistical Jump Model) that runs once a day at 21:00 UTC. Start with
 get_current_regime; call explain_regimes to describe what the regimes mean.
 The data is informational, not investment advice: report it as MacroPulse's
@@ -89,9 +89,12 @@ def create_server(client: MacroPulseClient) -> MCPServer:
 
     @server.tool(annotations=READ_ONLY)
     async def get_current_regime() -> dict[str, Any]:
-        """Today's macro regime: label, risk score, target equity exposure for that
-        regime and a one-line plain-English interpretation. Updated once a day after
-        21:00 UTC. No API key needed."""
+        """The latest published macro regime (dated the last pipeline run): label, risk
+        score, the regime's target equity exposure and MacroPulse's fixed one-line
+        description of that regime. The description is canned text per regime written in
+        market-commentary language: report it as MacroPulse's characterization of the
+        regime, never as investment advice or a recommendation for the user. Updated once
+        a day after 21:00 UTC. No API key needed."""
         return _as_data(await _fetch(client.get("/v1/public/regime", auth=Auth.PUBLIC)))
 
     @server.tool(annotations=READ_ONLY)
@@ -101,7 +104,9 @@ def create_server(client: MacroPulseClient) -> MCPServer:
         the four regime probabilities, model version and `signature`. The signature
         is Ed25519 (base64) over the canonical JSON (sorted keys, no whitespace) of
         the payload without the `signature` field. The payload is in `data`, exactly as
-        served; this tool does not verify the signature. No API key needed."""
+        served; this tool does not verify the signature. MacroPulse does not publish its
+        verification key yet, so third parties cannot verify the signature today. No API
+        key needed."""
         return _as_data(await _fetch(client.get("/v1/regime/current", auth=Auth.PUBLIC)))
 
     @server.tool(annotations=READ_ONLY)
@@ -125,8 +130,10 @@ def create_server(client: MacroPulseClient) -> MCPServer:
         end: OptionalDate = None,
     ) -> dict[str, Any]:
         """Daily regime history, newest first: regime, risk score and the four regime
-        probabilities per day. Needs MACROPULSE_API_KEY; the free plan works and
-        returns at most 30 rows."""
+        probabilities per day, weekends included. Rows dated before 2026-07-03, when the
+        v4 model went live, are a backfill computed with hindsight even though they carry
+        model_version v4; only later rows are live calls. Needs MACROPULSE_API_KEY; the
+        free plan works and returns at most 30 rows."""
         if start and end and start > end:
             raise ToolError("start must be on or before end.")
         params: dict[str, str | int] = {"limit": limit}

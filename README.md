@@ -6,11 +6,11 @@
 
 <!-- mcp-name: io.github.macropulse-lab/macropulse-mcp -->
 
-An [MCP](https://modelcontextprotocol.io) server for [MacroPulse](https://macropulse.live): the daily US macro regime as tools your AI agent can call in Claude Code, Claude Desktop, Cursor or any MCP client that runs local (stdio) servers. No code to write.
+An [MCP](https://modelcontextprotocol.io) server for [MacroPulse](https://macropulse.live): the daily US macro regime as tools for any MCP client that runs local (stdio) servers. Example configs for Claude Code, Claude Desktop and Cursor below. No code to write.
 
 Ask *"what macro regime are we in, and what does it mean?"* and the agent answers from the live MacroPulse feed.
 
-MacroPulse classifies each US trading day into one of four regimes (expansion, recovery, tightening, risk-off) with a frozen, versioned model: PCA over 13 daily macro and market features, followed by a Statistical Jump Model (v4). The pipeline runs once a day at 21:00 UTC, after the US close.
+MacroPulse assigns one of four regimes (expansion, recovery, tightening, risk-off) to every calendar day, weekends included, with a frozen, versioned model: PCA over 13 daily macro and market features, followed by a Statistical Jump Model (v4). The pipeline runs once a day at 21:00 UTC, after the US close.
 
 ## Requirements
 
@@ -23,9 +23,9 @@ The API key is optional: the public tools work without one. A free key (no credi
 ### Claude Code
 
 ```bash
-claude mcp add macropulse -- uvx macropulse-mcp
+claude mcp add --transport stdio macropulse -- uvx macropulse-mcp
 # with a key:
-claude mcp add macropulse -e MACROPULSE_API_KEY=mp_your_key -- uvx macropulse-mcp
+claude mcp add --env MACROPULSE_API_KEY=mp_your_key --transport stdio macropulse -- uvx macropulse-mcp
 ```
 
 ### Claude Desktop
@@ -68,16 +68,16 @@ All tools are read-only.
 
 | Tool | Needs | Returns |
 | --- | --- | --- |
-| `get_current_regime` | nothing | Today's regime, risk score, the regime's target equity exposure and a one-line interpretation |
+| `get_current_regime` | nothing | The latest published regime, risk score, the regime's target equity exposure and MacroPulse's fixed one-line description of that regime (a characterization, not advice) |
 | `get_signed_regime` | nothing | The current regime as MacroPulse's Ed25519-signed payload, returned exactly as served (the tool does not verify the signature) |
 | `get_market_snapshot` | nothing | Regime with confidence and persistence, net Fed liquidity z-score and trend |
 | `explain_regimes` | nothing (offline) | What the four regimes mean, their ids and target exposures, how and when the model runs |
-| `get_regime_history` | key (Free: up to 30 rows) | Daily regime, risk score and regime probabilities, newest first; optional `limit`, `start`, `end` |
+| `get_regime_history` | key (Free: up to 30 rows) | Daily regime, risk score and regime probabilities, newest first; rows before 2026-07-03 are a hindsight backfill; optional `limit`, `start`, `end` |
 | `get_forecast` | key, Starter or Pro | ARIMA projection of the regime probabilities for 1-10 business days (`horizon`) |
 | `get_scorecard` | key, Starter or Pro | Five normalized macro signals on a -1 to 1 scale |
 | `get_liquidity` | key, Starter or Pro | Net Fed liquidity time series (`limit`, 1-500) |
 
-API results come back under `data`, next to a `source` field that marks them as third-party data rather than instructions for the agent. When a call fails, the tool returns one line that says what to do: get a key, upgrade the plan, check the key, or try again later. The key is sent only in the `X-MacroPulse-Key` header and is never logged or echoed.
+API results come back under `data`, next to a `source` field that marks them as third-party data rather than instructions for the agent. When a call fails, the tool returns a one-line error; for a missing or invalid key, a plan that lacks the data, a rate limit or an outage it says what to do next. The key is sent only in the `X-MacroPulse-Key` header and is never logged or echoed.
 
 ## The four regimes
 
@@ -113,7 +113,7 @@ MacroPulse data is informational only and is not investment advice.
 
 ## Links
 
-[macropulse.live](https://macropulse.live) · [API docs](https://macropulse.live/api-docs) · [IRL](https://macropulse.live/irl), pre-execution compliance for trading agents, which uses the signed MacroPulse regime
+[macropulse.live](https://macropulse.live) · [API docs](https://macropulse.live/api-docs) · [IRL](https://norve.dev), pre-execution compliance for trading agents, which uses the signed MacroPulse regime
 
 ## License
 

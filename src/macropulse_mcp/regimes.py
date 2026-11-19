@@ -60,9 +60,13 @@ EXPLANATION: dict[str, Any] = {
     "what_is_a_regime": (
         "A macro regime is a persistent state of the economy defined by the combination of "
         "liquidity conditions, credit spreads, growth momentum and volatility. MacroPulse "
-        "classifies each US trading day into one of four states."
+        "assigns one of four states to every calendar day, weekends included."
     ),
     "regimes": list(REGIMES),
+    "profiles_note": (
+        "The summary and textbook_profile lines are illustrative: they describe how such "
+        "regimes are commonly characterized, not MacroPulse results or forecasts."
+    ),
     "target_equity_exposure_note": (
         "Each regime maps to a target equity exposure (100% / 75% / 25% / 0%). It is a "
         "rule of thumb attached to the label, not a recommendation for any portfolio."
