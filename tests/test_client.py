@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-
 import logging
+from collections.abc import AsyncIterator
 
 import httpx
 import pytest
@@ -358,8 +357,8 @@ async def test_streamed_oversized_body_is_cut_off(api: FakeApi) -> None:
 async def test_compressed_bodies_are_refused_unread(api: FakeApi, encoding: str) -> None:
     import gzip
 
-    # A double-gzipped bomb: a few KB on the wire, 200 MB once inflated.
-    bomb = gzip.compress(gzip.compress(b"0" * (200 * 1024 * 1024)))
+    # Any compressed payload proves the point: the body must never be iterated.
+    bomb = gzip.compress(gzip.compress(b"0" * 1024))
     read = False
 
     def body() -> object:
