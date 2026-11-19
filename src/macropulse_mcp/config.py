@@ -14,6 +14,9 @@ KEY_ENV = "MACROPULSE_API_KEY"
 BASE_ENV = "MACROPULSE_API_BASE"
 
 _MAX_KEY_LENGTH = 256
+# Issued keys are mp_ + token_urlsafe(32) (46 chars); owner/legacy keys have no fixed
+# format, so only a floor is enforced, not the prefix.
+_MIN_KEY_LENGTH = 16
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
@@ -44,10 +47,13 @@ def _parse_key(raw: str) -> tuple[str | None, str | None]:
         return None, None
     # Printable ASCII without spaces: anything else cannot be a MacroPulse key and,
     # in a header, could smuggle extra lines. Never include the value in the message.
-    if len(key) > _MAX_KEY_LENGTH or not all("!" <= ch <= "~" for ch in key):
+    if not _MIN_KEY_LENGTH <= len(key) <= _MAX_KEY_LENGTH or not all(
+        "!" <= ch <= "~" for ch in key
+    ):
         return None, (
-            f"{KEY_ENV} is set but malformed (it must be a single token of printable "
-            f"characters, no spaces). Copy the key again from {SIGNUP_URL}."
+            f"{KEY_ENV} is set but malformed (it must be a single token of "
+            f"{_MIN_KEY_LENGTH} or more printable characters, no spaces). Copy the key "
+            f"again from {SIGNUP_URL}."
         )
     return key, None
 

@@ -29,7 +29,14 @@ def test_blank_key_counts_as_no_key() -> None:
 
 @pytest.mark.parametrize(
     "bad_key",
-    ["mp_abc def", "mp_abc\r\nX-Injected: 1", "mp_\x00abc", "mp_ñandú", "mp_" + "a" * 300],
+    [
+        "mp_abc def",
+        "mp_abc\r\nX-Injected: 1",
+        "mp_\x00abc",
+        "mp_ñandú",
+        "mp_" + "a" * 300,
+        "mp_tooshort",  # under 16 characters
+    ],
 )
 def test_malformed_key_is_dropped_and_explained_without_echoing_it(bad_key: str) -> None:
     settings = load_settings({"MACROPULSE_API_KEY": bad_key})
@@ -69,3 +76,19 @@ def test_rejects_unsafe_base_urls(base: str) -> None:
 
     assert "MACROPULSE_API_BASE" in str(excinfo.value)
     assert "pass" not in str(excinfo.value)
+
+
+def test_accepts_keys_in_the_issued_format() -> None:
+    # macropulse api/auth.py: f"mp_{secrets.token_urlsafe(32)}" -> 46 characters.
+    import secrets
+
+    issued = f"mp_{secrets.token_urlsafe(32)}"
+
+    assert load_settings({"MACROPULSE_API_KEY": issued}).api_key == issued
+
+
+def test_accepts_a_16_character_key_without_the_mp_prefix() -> None:
+    # Owner and legacy env keys have no fixed format; only the length floor applies.
+    key = "x" * 16
+
+    assert load_settings({"MACROPULSE_API_KEY": key}).api_key == key

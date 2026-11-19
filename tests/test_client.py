@@ -294,3 +294,79 @@ async def test_total_deadline_caps_a_slow_response(api: FakeApi) -> None:
 
     with pytest.raises(MacroPulseError, match="did not respond in time"):
         await client.get("/v1/public/regime", auth=Auth.PUBLIC)
+
+
+async def test_relayed_server_text_is_labelled_as_the_apis(api: FakeApi) -> None:
+    api.json("/v1/forecast", {"detail": "horizon looks odd"}, status=418)
+
+    with pytest.raises(MacroPulseError) as excinfo:
+        await make_client(api).get("/v1/forecast", auth=Auth.PAID)
+
+    assert str(excinfo.value) == (
+        "MacroPulse rejected the request (HTTP 418): MacroPulse API said: horizon looks odd"
+    )
+
+
+@pytest.mark.parametrize("status", [200, 500])
+async def test_deeply_nested_json_is_rejected_cleanly(api: FakeApi, status: int) -> None:
+    deep = "[" * 200_000 + "]" * 200_000
+    api.raw(
+        "/v1/scorecard",
+        lambda _r: httpx.Response(
+            status, content=deep.encode(), headers={"content-type": "application/json"}
+        ),
+    )
+
+    with pytest.raises(MacroPulseError) as excinfo:
+        await make_client(api).get("/v1/scorecard", auth=Auth.PAID)
+
+    assert "\n" not in str(excinfo.value)
+
+
+async def test_declared_oversized_body_is_refused_without_reading_it(api: FakeApi) -> None:
+    from macropulse_mcp.client import MAX_BODY_BYTES
+
+    api.raw(
+        "/v1/public/regime",
+        lambda _r: httpx.Response(
+            200, headers={"content-length": str(MAX_BODY_BYTES + 1)}, content=b"{}"
+        ),
+    )
+
+    with pytest.raises(MacroPulseError, match=r"larger than 5 MB"):
+        await make_client(api).get("/v1/public/regime", auth=Auth.PUBLIC)
+
+
+async def test_streamed_oversized_body_is_cut_off(api: FakeApi) -> None:
+    from macropulse_mcp.client import MAX_BODY_BYTES
+
+    def chunks() -> object:
+        async def gen():  # type: ignore[no-untyped-def]
+            for _ in range(MAX_BODY_BYTES // 65536 + 2):
+                yield b" " * 65536
+
+        return gen()
+
+    api.raw("/v1/public/regime", lambda _r: httpx.Response(200, content=chunks()))  # type: ignore[arg-type]
+
+    with pytest.raises(MacroPulseError, match=r"larger than 5 MB; it was not read"):
+        await make_client(api).get("/v1/public/regime", auth=Auth.PUBLIC)
+
+
+async def test_gzip_bodies_are_decoded_once(api: FakeApi) -> None:
+    import gzip
+    import json as jsonlib
+
+    payload = gzip.compress(jsonlib.dumps({"regime": "tightening"}).encode())
+    api.raw(
+        "/v1/public/regime",
+        lambda _r: httpx.Response(
+            200,
+            content=payload,
+            headers={"content-encoding": "gzip", "content-type": "application/json"},
+        ),
+    )
+
+    body = await make_client(api).get("/v1/public/regime", auth=Auth.PUBLIC)
+
+    assert body == {"regime": "tightening"}

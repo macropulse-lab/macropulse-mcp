@@ -27,6 +27,13 @@ DEFAULT_DEADLINE_SECONDS = 15.0
 _DETAIL_MAX = 160
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 _REDACTED = "[redacted]"
+# Largest body read from the API; real responses are a few KB.
+MAX_BODY_BYTES = 5 * 1024 * 1024
+RELAY_PREFIX = "MacroPulse API said: "
+
+
+class _BodyTooLarge(Exception):
+    pass
 
 
 class Auth(enum.Enum):
@@ -98,6 +105,12 @@ class MacroPulseClient:
                 f"The MacroPulse API did not respond in time ({self.deadline_seconds:g}-second "
                 "limit). Try again later."
             ) from None
+        except _BodyTooLarge:
+            logger.warning("GET %s returned a body over %d bytes", path, MAX_BODY_BYTES)
+            raise MacroPulseError(
+                f"MacroPulse returned a response larger than {MAX_BODY_BYTES // (1024 * 1024)} MB; "
+                "it was not read. Try again later."
+            ) from None
         except httpx.HTTPError as exc:
             logger.warning("GET %s failed (%s)", path, type(exc).__name__)
             raise MacroPulseError(
@@ -110,7 +123,7 @@ class MacroPulseClient:
             raise MacroPulseError(self._scrub(_explain(response, self._settings.api_key)))
         try:
             body = response.json()
-        except ValueError:
+        except (ValueError, RecursionError):
             logger.warning("GET %s returned a non-JSON body", path)
             raise MacroPulseError(
                 "MacroPulse returned an unexpected response (not JSON). Try again later."
@@ -132,7 +145,30 @@ class MacroPulseClient:
             transport=self._transport,
             follow_redirects=False,
         ) as http:
-            return await http.get(path, headers=headers, params=params)
+            async with http.stream("GET", path, headers=headers, params=params) as streamed:
+                declared = streamed.headers.get("content-length", "")
+                if declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+                    raise _BodyTooLarge
+                chunks: list[bytes] = []
+                size = 0
+                async for chunk in streamed.aiter_bytes():
+                    size += len(chunk)
+                    if size > MAX_BODY_BYTES:
+                        raise _BodyTooLarge
+                    chunks.append(chunk)
+            # aiter_bytes() already decoded the body (and the cap applies to the decoded
+            # size, which stops compression bombs), so drop the encoding headers.
+            headers = {
+                k: v
+                for k, v in streamed.headers.items()
+                if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")
+            }
+            return httpx.Response(
+                streamed.status_code,
+                headers=headers,
+                content=b"".join(chunks),
+                request=streamed.request,
+            )
 
     def _scrub(self, text: str) -> str:
         return _scrub_text(text, self._settings.api_key)
@@ -201,7 +237,8 @@ def _explain(response: httpx.Response, key: str | None) -> str:
         )
     if status >= 500:
         return f"The MacroPulse API failed (HTTP {status}). Try again later."
-    suffix = f": {detail}" if detail else ""
+    # Relayed server text is labelled as such: third-party data, not our advice.
+    suffix = f": {RELAY_PREFIX}{detail}" if detail else ""
     return f"MacroPulse rejected the request (HTTP {status}){suffix}"
 
 
@@ -209,7 +246,7 @@ def _error_fields(response: httpx.Response, key: str | None) -> tuple[str, str]:
     """(`error`, `detail`) from a FastAPI-style error body, sanitized to one short line."""
     try:
         body = response.json()
-    except ValueError:
+    except (ValueError, RecursionError):
         return "", ""
     if not isinstance(body, dict):
         return "", ""

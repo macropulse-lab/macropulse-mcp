@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.metadata
 import json
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,12 @@ def test_versions_agree() -> None:
     project = _pyproject()
     assert "version" in project["project"]["dynamic"]
     assert project["tool"]["hatch"]["version"]["path"] == "src/macropulse_mcp/__init__.py"
-    version = importlib.metadata.version("macropulse-mcp")
+    # Read the file itself: installed metadata can be stale after a version bump
+    # until the package is reinstalled.
+    source = (ROOT / "src" / "macropulse_mcp" / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'^__version__ = "([^"]+)"$', source, flags=re.MULTILINE)
+    assert match is not None
+    version = match.group(1)
     manifest = _server_json()
 
     assert version == __version__ == manifest["version"]
