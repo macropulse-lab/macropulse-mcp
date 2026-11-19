@@ -370,3 +370,45 @@ async def test_gzip_bodies_are_decoded_once(api: FakeApi) -> None:
     body = await make_client(api).get("/v1/public/regime", auth=Auth.PUBLIC)
 
     assert body == {"regime": "tightening"}
+
+
+async def test_requests_ask_for_an_uncompressed_body(api: FakeApi) -> None:
+    api.json("/v1/scorecard", {})
+
+    await make_client(api).get("/v1/scorecard", auth=Auth.PAID)
+
+    assert api.last.headers["accept-encoding"] == "identity"
+
+
+async def test_body_that_parses_but_is_too_deep_to_scrub_is_a_clean_error(
+    api: FakeApi,
+) -> None:
+    import json as jsonlib
+
+    # Find a depth json can parse but the recursive scrub cannot walk (~995 levels).
+    depth = 990
+    while True:
+        text = "[" * depth + '"x"' + "]" * depth
+        try:
+            jsonlib.loads(text)
+        except RecursionError:
+            pytest.skip("json parser hit the recursion limit first on this interpreter")
+        from macropulse_mcp.client import _scrub_json
+
+        try:
+            _scrub_json(jsonlib.loads(text), FAKE_KEY)
+        except RecursionError:
+            break
+        depth += 5
+        assert depth < 10_000
+    api.raw(
+        "/v1/scorecard",
+        lambda _r: httpx.Response(
+            200, content=text.encode(), headers={"content-type": "application/json"}
+        ),
+    )
+
+    with pytest.raises(MacroPulseError, match="too deeply nested") as excinfo:
+        await make_client(api, api_key=FAKE_KEY).get("/v1/scorecard", auth=Auth.PAID)
+
+    assert "\n" not in str(excinfo.value)

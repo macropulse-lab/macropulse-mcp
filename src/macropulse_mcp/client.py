@@ -92,7 +92,12 @@ class MacroPulseClient:
         params: dict[str, str | int] | None = None,
     ) -> Any:
         """GET `path` and return the parsed JSON body, or raise `MacroPulseError`."""
-        headers = {"User-Agent": f"macropulse-mcp/{__version__}", "Accept": "application/json"}
+        headers = {
+            "User-Agent": f"macropulse-mcp/{__version__}",
+            "Accept": "application/json",
+            # No compression: the 5 MB cap then bounds what the server can make us inflate.
+            "Accept-Encoding": "identity",
+        }
         if auth is not Auth.PUBLIC:
             headers["X-MacroPulse-Key"] = self._require_key(auth)
 
@@ -122,13 +127,15 @@ class MacroPulseClient:
         if not response.is_success:
             raise MacroPulseError(self._scrub(_explain(response, self._settings.api_key)))
         try:
-            body = response.json()
+            # Scrubbing walks the parsed value recursively, so a body nested deep enough
+            # to parse can still exhaust the stack here: both live inside the same guard.
+            return _scrub_json(response.json(), self._settings.api_key)
         except (ValueError, RecursionError):
-            logger.warning("GET %s returned a non-JSON body", path)
+            logger.warning("GET %s returned a non-JSON or too deeply nested body", path)
             raise MacroPulseError(
-                "MacroPulse returned an unexpected response (not JSON). Try again later."
+                "MacroPulse returned an unexpected response (not JSON or too deeply nested). "
+                "Try again later."
             ) from None
-        return _scrub_json(body, self._settings.api_key)
 
     def _require_key(self, auth: Auth) -> str:
         if self._settings.api_key is None:
