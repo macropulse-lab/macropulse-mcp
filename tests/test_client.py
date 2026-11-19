@@ -9,7 +9,7 @@ import pytest
 
 from macropulse_mcp.client import Auth, MacroPulseError
 
-from .conftest import API_BASE, FAKE_KEY, FakeApi, make_client
+from .conftest import API_BASE, FAKE_KEY, FakeApi, dumps, make_client
 
 
 async def test_public_calls_never_send_the_key(api: FakeApi) -> None:
@@ -83,8 +83,18 @@ ERROR_CASES = [
     ),
     (
         403,
-        {"error": "ip_locked", "detail": "Your API key is temporarily bound to another IP."},
-        "bound to another IP",
+        {
+            "error": "ip_locked",
+            # The real detail (api/middleware/rate_limit.py) is ~230 chars; truncation
+            # would cut the actionable part, so the client uses its own fixed text.
+            "detail": (
+                "Your API key is temporarily bound to another IP address. Wait 15 minutes of "
+                "inactivity for the lock to release, then retry from any location. Paid "
+                "plans (Starter and Pro) can call from multiple locations."
+            ),
+        },
+        "Your key is bound to another IP address; wait 15 minutes of inactivity or use a "
+        "paid plan",
     ),
     (402, {"detail": "suspended due to a failed payment"}, "failed payment"),
     (429, {"error": "rate_limit_exceeded", "detail": "Daily limit"}, "rate limit"),
@@ -137,7 +147,7 @@ async def test_timeout_is_translated(api: FakeApi) -> None:
 
     api.raw("/v1/public/regime", slow)
 
-    with pytest.raises(MacroPulseError, match="did not respond within 10 seconds"):
+    with pytest.raises(MacroPulseError, match="did not respond in time"):
         await make_client(api).get("/v1/public/regime", auth=Auth.PUBLIC)
 
 
@@ -199,3 +209,88 @@ async def test_odd_error_bodies_still_give_a_message(
 def test_has_key(api: FakeApi) -> None:
     assert make_client(api).has_key is True
     assert make_client(api, api_key=None).has_key is False
+
+
+async def test_a_successful_body_echoing_the_key_is_scrubbed(api: FakeApi) -> None:
+    api.json(
+        "/v1/scorecard",
+        {"echo": f"key={FAKE_KEY}", "nested": [{"k": FAKE_KEY}], FAKE_KEY: 1, "n": 0.5},
+    )
+
+    body = await make_client(api).get("/v1/scorecard", auth=Auth.PAID)
+
+    assert FAKE_KEY not in dumps(body)
+    assert body == {
+        "echo": "key=[redacted]",
+        "nested": [{"k": "[redacted]"}],
+        "[redacted]": 1,
+        "n": 0.5,
+    }
+
+
+async def test_key_straddling_the_detail_limit_is_scrubbed_before_truncation(
+    api: FakeApi,
+) -> None:
+    # Place the key so that truncating first would leave a prefix of it behind.
+    detail = "x" * 140 + FAKE_KEY + " tail"
+    api.json("/v1/forecast", {"detail": detail}, status=418)
+
+    with pytest.raises(MacroPulseError) as excinfo:
+        await make_client(api).get("/v1/forecast", auth=Auth.PAID)
+
+    message = str(excinfo.value)
+    assert FAKE_KEY[:12] not in message
+    assert "[redacted]" in message
+
+
+async def test_redirects_are_never_followed(api: FakeApi) -> None:
+    api.raw(
+        "/v1/scorecard",
+        lambda _r: httpx.Response(302, headers={"Location": "https://evil.invalid/steal"}),
+    )
+    api.json("/steal", {"stolen": True})
+
+    with pytest.raises(MacroPulseError, match=r"redirect \(HTTP 302\)"):
+        await make_client(api).get("/v1/scorecard", auth=Auth.PAID)
+
+    assert len(api.requests) == 1
+    assert api.last.url.path == "/v1/scorecard"
+
+
+async def test_http_client_is_built_with_follow_redirects_false(
+    api: FakeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[object] = []
+    real = httpx.AsyncClient
+
+    def spy(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        seen.append(kwargs.get("follow_redirects"))
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(httpx, "AsyncClient", spy)
+    api.json("/v1/public/regime", {})
+
+    await make_client(api).get("/v1/public/regime", auth=Auth.PUBLIC)
+
+    assert seen == [False]
+
+
+async def test_total_deadline_caps_a_slow_response(api: FakeApi) -> None:
+    import asyncio
+
+    class Slow(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(5)
+            return httpx.Response(200, json={})
+
+    from macropulse_mcp.client import MacroPulseClient
+    from macropulse_mcp.config import Settings
+
+    client = MacroPulseClient(
+        Settings(api_base=API_BASE, api_key=None, api_key_problem=None),
+        transport=Slow(),
+        deadline_seconds=0.05,
+    )
+
+    with pytest.raises(MacroPulseError, match="did not respond in time"):
+        await client.get("/v1/public/regime", auth=Auth.PUBLIC)
